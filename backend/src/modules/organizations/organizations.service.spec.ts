@@ -1,0 +1,474 @@
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common'
+import { OrganizationsService } from './organizations.service'
+
+const mockOrg = {
+  id: 'org-1',
+  name: 'Test Org',
+  slug: 'test-org',
+  createdAt: new Date(),
+  updatedAt: new Date(),
+}
+
+const mockUser = {
+  id: 'user-1',
+  email: 'test@example.com',
+  firstName: 'John',
+  lastName: 'Doe',
+}
+
+function createService() {
+  const prisma = {
+    organization: {
+      findUnique: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+    },
+    organizationMember: {
+      findMany: jest.fn(),
+      findFirst: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+      count: jest.fn(),
+      deleteMany: jest.fn(),
+    },
+    user: {
+      findUnique: jest.fn(),
+      findFirst: jest.fn().mockResolvedValue(null),
+    },
+    project: {
+      findMany: jest.fn(),
+      count: jest.fn(),
+      delete: jest.fn(),
+    },
+    brand: {
+      deleteMany: jest.fn(),
+    },
+    auditLog: {
+      deleteMany: jest.fn(),
+    },
+    apiKey: {
+      deleteMany: jest.fn(),
+    },
+    configVersion: {
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
+    webhook: {
+      findMany: jest.fn().mockResolvedValue([]),
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
+    webhookDelivery: {
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
+    translationValue: {
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
+    translationKey: {
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
+    $transaction: jest.fn(async (ops: unknown) =>
+      Array.isArray(ops) ? Promise.all(ops) : undefined
+    ),
+  } as any
+
+  const service = new OrganizationsService(prisma)
+  return { service, prisma }
+}
+
+describe('OrganizationsService', () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+  })
+
+  describe('findAll', () => {
+    it('returns organizations with counts for a user', async () => {
+      const { service, prisma } = createService()
+      prisma.organizationMember.findMany.mockResolvedValue([
+        { organizationId: 'org-1', organization: mockOrg, role: 'OWNER' },
+      ])
+      prisma.organizationMember.count.mockResolvedValue(3)
+      prisma.project.count.mockResolvedValue(2)
+
+      const result = await service.findAll('user-1')
+
+      expect(result).toHaveLength(1)
+      expect(result[0].name).toBe('Test Org')
+      expect(result[0].role).toBe('OWNER')
+      expect(result[0].memberCount).toBe(3)
+      expect(result[0].projectCount).toBe(2)
+    })
+
+    it('returns empty array when user has no memberships', async () => {
+      const { service, prisma } = createService()
+      prisma.organizationMember.findMany.mockResolvedValue([])
+
+      const result = await service.findAll('user-1')
+
+      expect(result).toHaveLength(0)
+    })
+  })
+
+  describe('findOne', () => {
+    it('returns the organization when found', async () => {
+      const { service, prisma } = createService()
+      prisma.organization.findUnique.mockResolvedValue(mockOrg)
+
+      const result = await service.findOne('org-1')
+
+      expect(result.id).toBe('org-1')
+      expect(result.name).toBe('Test Org')
+    })
+
+    it('throws when organization is not found', async () => {
+      const { service, prisma } = createService()
+      prisma.organization.findUnique.mockResolvedValue(null)
+
+      await expect(service.findOne('missing')).rejects.toBeInstanceOf(
+        NotFoundException
+      )
+    })
+  })
+
+  describe('findByUser', () => {
+    it('returns the first organization for a user with counts', async () => {
+      const { service, prisma } = createService()
+      prisma.organizationMember.findFirst.mockResolvedValue({
+        organizationId: 'org-1',
+        organization: mockOrg,
+        role: 'ADMIN',
+      })
+      prisma.organizationMember.count.mockResolvedValue(5)
+      prisma.project.count.mockResolvedValue(3)
+
+      const result = await service.findByUser('user-1')
+
+      expect(result).not.toBeNull()
+      expect(result!.name).toBe('Test Org')
+      expect(result!.role).toBe('ADMIN')
+      expect(result!.memberCount).toBe(5)
+    })
+
+    it('returns null when user has no membership', async () => {
+      const { service, prisma } = createService()
+      prisma.organizationMember.findFirst.mockResolvedValue(null)
+
+      const result = await service.findByUser('user-1')
+
+      expect(result).toBeNull()
+    })
+  })
+
+  describe('create', () => {
+    it('creates an organization and adds user as OWNER', async () => {
+      const { service, prisma } = createService()
+      prisma.organization.create.mockResolvedValue(mockOrg)
+      prisma.organizationMember.create.mockResolvedValue({})
+
+      const result = await service.create('Test Org', 'test-org', 'user-1')
+
+      expect(result.name).toBe('Test Org')
+      expect(prisma.organization.create).toHaveBeenCalledWith({
+        data: { name: 'Test Org', slug: 'test-org' },
+      })
+      expect(prisma.organizationMember.create).toHaveBeenCalledWith({
+        data: {
+          userId: 'user-1',
+          organizationId: 'org-1',
+          role: 'OWNER',
+        },
+      })
+    })
+
+    it('generates a UUID slug when none is provided', async () => {
+      const { service, prisma } = createService()
+      prisma.organization.create.mockResolvedValue(mockOrg)
+      prisma.organizationMember.create.mockResolvedValue({})
+
+      await service.create('Test Org', undefined, 'user-1')
+
+      const createCall = prisma.organization.create.mock.calls[0][0]
+      expect(createCall.data.slug).toBeDefined()
+      expect(createCall.data.slug.length).toBeGreaterThan(0)
+    })
+  })
+
+  describe('update', () => {
+    it('updates the organization', async () => {
+      const { service, prisma } = createService()
+      prisma.organization.update.mockResolvedValue({
+        ...mockOrg,
+        name: 'Updated',
+      })
+
+      const result = await service.update('org-1', { name: 'Updated' })
+
+      expect(result.name).toBe('Updated')
+      expect(prisma.organization.update).toHaveBeenCalledWith({
+        where: { id: 'org-1' },
+        data: { name: 'Updated' },
+      })
+    })
+  })
+
+  describe('delete', () => {
+    it('deletes the organization with all dependencies', async () => {
+      const { service, prisma } = createService()
+      prisma.project.findMany.mockResolvedValue([{ id: 'proj-1' }])
+      prisma.brand.deleteMany.mockResolvedValue({ count: 0 })
+      prisma.auditLog.deleteMany.mockResolvedValue({ count: 0 })
+      prisma.project.delete.mockResolvedValue({})
+      prisma.apiKey.deleteMany.mockResolvedValue({ count: 0 })
+      prisma.organizationMember.deleteMany.mockResolvedValue({ count: 1 })
+      prisma.organization.delete.mockResolvedValue({})
+
+      await service.delete('org-1')
+
+      expect(prisma.organization.delete).toHaveBeenCalledWith({
+        where: { id: 'org-1' },
+      })
+      expect(prisma.organizationMember.deleteMany).toHaveBeenCalled()
+    })
+
+    it('removes config versions, webhooks and deliveries of every project', async () => {
+      const { service, prisma } = createService()
+      prisma.project.findMany.mockResolvedValue([
+        { id: 'proj-1' },
+        { id: 'proj-2' },
+      ])
+      prisma.webhook.findMany.mockImplementation(({ where }: any) =>
+        Promise.resolve(where.projectId === 'proj-1' ? [{ id: 'wh-1' }] : [])
+      )
+
+      await service.delete('org-1')
+
+      for (const projectId of ['proj-1', 'proj-2']) {
+        expect(prisma.configVersion.deleteMany).toHaveBeenCalledWith({
+          where: { projectId },
+        })
+        expect(prisma.webhook.deleteMany).toHaveBeenCalledWith({
+          where: { projectId },
+        })
+      }
+      expect(prisma.webhookDelivery.deleteMany).toHaveBeenCalledWith({
+        where: { webhookId: { in: ['wh-1'] } },
+      })
+    })
+
+    it('removes translation values and keys of every project before deleting it', async () => {
+      const { service, prisma } = createService()
+      prisma.project.findMany.mockResolvedValue([
+        { id: 'proj-1' },
+        { id: 'proj-2' },
+      ])
+      const order: string[] = []
+      prisma.translationKey.deleteMany.mockImplementation(
+        async ({ where }: any) => {
+          order.push(`keys:${where.projectId}`)
+        }
+      )
+      prisma.project.delete.mockImplementation(async ({ where }: any) => {
+        order.push(`project:${where.id}`)
+      })
+
+      await service.delete('org-1')
+
+      for (const projectId of ['proj-1', 'proj-2']) {
+        expect(prisma.translationValue.deleteMany).toHaveBeenCalledWith({
+          where: { projectId },
+        })
+        expect(prisma.translationKey.deleteMany).toHaveBeenCalledWith({
+          where: { projectId },
+        })
+      }
+      expect(order).toEqual([
+        'keys:proj-1',
+        'project:proj-1',
+        'keys:proj-2',
+        'project:proj-2',
+      ])
+    })
+
+    it('handles organization with no projects', async () => {
+      const { service, prisma } = createService()
+      prisma.project.findMany.mockResolvedValue([])
+      prisma.auditLog.deleteMany.mockResolvedValue({ count: 0 })
+      prisma.apiKey.deleteMany.mockResolvedValue({ count: 0 })
+      prisma.organizationMember.deleteMany.mockResolvedValue({ count: 0 })
+      prisma.organization.delete.mockResolvedValue({})
+
+      await service.delete('org-1')
+
+      expect(prisma.project.delete).not.toHaveBeenCalled()
+      expect(prisma.organization.delete).toHaveBeenCalled()
+    })
+  })
+
+  describe('getMembers', () => {
+    it('returns formatted members list', async () => {
+      const { service, prisma } = createService()
+      prisma.organizationMember.findMany.mockResolvedValue([
+        {
+          id: 'member-1',
+          user: mockUser,
+          role: 'OWNER',
+          createdAt: new Date('2024-01-01'),
+        },
+      ])
+
+      const result = await service.getMembers('org-1')
+
+      expect(result).toHaveLength(1)
+      expect(result[0].email).toBe('test@example.com')
+      expect(result[0].name).toBe('John Doe')
+      expect(result[0].role).toBe('OWNER')
+    })
+
+    it('uses email as name when first/last name are null', async () => {
+      const { service, prisma } = createService()
+      prisma.organizationMember.findMany.mockResolvedValue([
+        {
+          id: 'member-1',
+          user: { ...mockUser, firstName: null, lastName: null },
+          role: 'MEMBER',
+          createdAt: new Date(),
+        },
+      ])
+
+      const result = await service.getMembers('org-1')
+
+      expect(result[0].name).toBe('test@example.com')
+    })
+  })
+
+  describe('removeMember', () => {
+    it('removes an existing member', async () => {
+      const { service, prisma } = createService()
+      prisma.organizationMember.findFirst.mockResolvedValue({
+        id: 'member-1',
+      })
+      prisma.organizationMember.delete.mockResolvedValue({})
+
+      await service.removeMember('org-1', 'user-1')
+
+      expect(prisma.organizationMember.delete).toHaveBeenCalledWith({
+        where: { id: 'member-1' },
+      })
+    })
+
+    it("deletes the member's MCP keys of this organization in the same transaction", async () => {
+      const { service, prisma } = createService()
+      prisma.organizationMember.findFirst.mockResolvedValue({
+        id: 'member-1',
+      })
+      prisma.apiKey.deleteMany.mockReturnValue('delete-keys-op')
+      prisma.organizationMember.delete.mockReturnValue('delete-member-op')
+
+      await service.removeMember('org-1', 'user-1')
+
+      expect(prisma.apiKey.deleteMany).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1', userId: 'user-1', type: 'MCP' },
+      })
+      expect(prisma.$transaction).toHaveBeenCalledWith([
+        'delete-keys-op',
+        'delete-member-op',
+      ])
+    })
+
+    it('throws when member is not found', async () => {
+      const { service, prisma } = createService()
+      prisma.organizationMember.findFirst.mockResolvedValue(null)
+
+      await expect(
+        service.removeMember('org-1', 'user-1')
+      ).rejects.toBeInstanceOf(NotFoundException)
+      expect(prisma.apiKey.deleteMany).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('getStats', () => {
+    it('returns stats for a user with organizations', async () => {
+      const { service, prisma } = createService()
+      prisma.organizationMember.findMany.mockResolvedValue([
+        {
+          organization: {
+            projects: [{ id: 'proj-1' }, { id: 'proj-2' }],
+          },
+        },
+      ])
+
+      const result = await service.getStats('user-1')
+
+      expect(result.totalOrganizations).toBe(1)
+      expect(result.totalProjects).toBe(2)
+    })
+
+    it('returns zero stats when user has no organizations', async () => {
+      const { service, prisma } = createService()
+      prisma.organizationMember.findMany.mockResolvedValue([])
+
+      const result = await service.getStats('user-1')
+
+      expect(result.totalOrganizations).toBe(0)
+      expect(result.totalProjects).toBe(0)
+    })
+  })
+
+  describe('create (slug conflict)', () => {
+    it('maps a duplicate slug to ConflictException', async () => {
+      const { service, prisma } = createService()
+      prisma.organization.create.mockRejectedValue({ code: 'P2002' })
+
+      await expect(
+        service.create('Test Org', 'taken', 'user-1')
+      ).rejects.toBeInstanceOf(ConflictException)
+      expect(prisma.organizationMember.create).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('countOwners', () => {
+    it('counts only OWNER memberships of the organization', async () => {
+      const { service, prisma } = createService()
+      prisma.organizationMember.count.mockResolvedValue(2)
+
+      await expect(service.countOwners('org-1')).resolves.toBe(2)
+      expect(prisma.organizationMember.count).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1', role: 'OWNER' },
+      })
+    })
+  })
+
+  describe('updateMemberRole', () => {
+    it('updates the role and returns a formatted member', async () => {
+      const { service, prisma } = createService()
+      prisma.organizationMember.update.mockResolvedValue({
+        id: 'member-1',
+        userId: 'user-1',
+        role: 'VIEWER',
+        user: mockUser,
+      })
+
+      const result = await service.updateMemberRole('member-1', 'VIEWER')
+
+      expect(prisma.organizationMember.update.mock.calls[0][0]).toMatchObject({
+        where: { id: 'member-1' },
+        data: { role: 'VIEWER' },
+      })
+      expect(result.name).toBe('John Doe')
+      expect(result.role).toBe('VIEWER')
+    })
+
+    it('rejects invalid roles', async () => {
+      const { service, prisma } = createService()
+
+      await expect(
+        service.updateMemberRole('member-1', 'SUPERADMIN')
+      ).rejects.toBeInstanceOf(BadRequestException)
+      expect(prisma.organizationMember.update).not.toHaveBeenCalled()
+    })
+  })
+})

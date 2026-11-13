@@ -1,0 +1,178 @@
+# Coolify Configuration for Translately
+# This file configures the application for deployment on Coolify
+
+name: translately
+description: "Translation Management System - Manage UI texts per language and brand and deliver them as i18next JSON"
+version: 1.0.0
+
+# Environment Variables that can be configured in Coolify UI
+environment:
+  - name: NODE_ENV
+    default: production
+    description: "Node environment"
+    
+  - name: DATABASE_URL
+    default: mongodb://mongodb:27017/translately?replicaSet=rs0
+    description: "MongoDB connection string"
+    required: true
+    
+  - name: REDIS_URL
+    default: redis://redis:6379
+    description: "Redis connection string"
+    required: true
+    
+  - name: JWT_SECRET
+    description: "JWT Secret for authentication (min. 32 chars, e.g. openssl rand -hex 32). The backend refuses to start with a weak secret."
+    required: true
+    isSecret: true
+    
+  - name: PORT
+    default: "4000"
+    description: "Backend server port"
+    
+  - name: FRONTEND_PORT
+    default: "3000"
+    description: "Frontend server port"
+    
+  - name: FRONTEND_URL
+    description: "Public URL of the dashboard, used for links in emails (e.g. https://app.translately.de)"
+    required: true
+
+  - name: METRICS_TOKEN
+    description: "Bearer token for /metrics (disabled in production when unset)"
+    isSecret: true
+
+  - name: SETUP_TOKEN
+    description: "Recommended for public deployments: the first-run setup (/setup) requires this token, so only you can claim the fresh instance (e.g. openssl rand -hex 32)"
+    isSecret: true
+
+  - name: SKIP_DB_PUSH
+    default: "false"
+    description: "Set to true to skip the schema/index sync (prisma db push) on backend start"
+
+  - name: WEBHOOK_ALLOW_PRIVATE
+    default: "false"
+    description: "Allow webhook URLs that point to private, loopback or link-local addresses (SSRF protection). Only for receivers in your own trusted network."
+
+  - name: WEBHOOK_ALLOW_INSECURE
+    default: "false"
+    description: "Allow plain http:// webhook URLs (default: https only)"
+
+  - name: WEBHOOK_WORKER_DISABLED
+    default: "false"
+    description: "Disable the webhook delivery worker on this instance"
+
+  - name: SDK_RATE_LIMIT_PER_MINUTE
+    default: "600"
+    description: "Per-IP requests per minute on the delivery routes (/sdk/translations/...)"
+
+  - name: CORS_ORIGINS
+    description: "Comma-separated list of allowed CORS origins (e.g., https://app.translately.de,https://www.mein-shop.de)"
+    
+  - name: VITE_API_URL
+    default: "/api"
+    description: "API URL the browser calls, baked in at build time. Keep /api (proxied by the frontend nginx); only set a full URL for a separate API domain"
+
+# Port configuration
+ports:
+  - name: backend
+    port: 4000
+    description: "Backend API port"
+    
+  - name: frontend
+    port: 3000
+    description: "Frontend web port"
+    
+
+# Health checks
+healthchecks:
+  - name: backend
+    path: /api/health
+    port: 4000
+    
+  - name: frontend
+    path: /
+    port: 3000
+
+# Persistent storage
+volumes:
+  - name: mongodb_data
+    mountPath: /data/db
+    description: "MongoDB data storage"
+    
+  - name: redis_data
+    mountPath: /data
+    description: "Redis data storage"
+    
+  - name: uploads
+    mountPath: /app/uploads
+    description: "File uploads storage"
+
+# Services configuration
+services:
+  mongodb:
+    image: mongo:7
+    command: ["--replSet", "rs0", "--bind_ip_all", "--port", "27017"]
+    environment:
+      MONGO_INITDB_DATABASE: translately
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      # Healthy only once this node is the writable primary: right after
+      # rs.initiate() (and after every restart) there is a short election
+      # window in which the backend's schema sync would fail.
+      test: echo "try { rs.status() } catch (err) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongodb:27017'}]}) }; if (!db.hello().isWritablePrimary) quit(1)" | mongosh --port 27017 --quiet
+      interval: 5s
+      timeout: 30s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      - NODE_ENV=${NODE_ENV}
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - PORT=${PORT}
+      - FRONTEND_URL=${FRONTEND_URL}
+      - CORS_ORIGINS=${CORS_ORIGINS}
+      - METRICS_TOKEN=${METRICS_TOKEN}
+      - SETUP_TOKEN=${SETUP_TOKEN}
+      - SKIP_DB_PUSH=${SKIP_DB_PUSH}
+      - WEBHOOK_ALLOW_PRIVATE=${WEBHOOK_ALLOW_PRIVATE}
+      - WEBHOOK_ALLOW_INSECURE=${WEBHOOK_ALLOW_INSECURE}
+      - WEBHOOK_WORKER_DISABLED=${WEBHOOK_WORKER_DISABLED}
+      - SDK_RATE_LIMIT_PER_MINUTE=${SDK_RATE_LIMIT_PER_MINUTE}
+    expose:
+      - "4000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - uploads:/app/uploads
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      - BACKEND_HOST=backend
+      - BACKEND_PORT=${PORT}
+    ports:
+      - "${FRONTEND_PORT}:80"
+    depends_on:
+      - backend

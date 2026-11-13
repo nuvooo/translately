@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 144 112">
+  <style>
+    .ink { fill: #101414; }
+    @media (prefers-color-scheme: dark) { .ink { fill: #FFFFFF; } }
+  </style>
+  <defs>
+    <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="144" height="112">
+      <rect width="144" height="112" fill="#FFFFFF"/>
+      <path d="M 21 54 L 34 24 L 47 54 M 26 44 H 42" fill="none" stroke="#000000" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+      <g fill="#000000" stroke="#000000" stroke-width="10" stroke-linejoin="round">
+        <rect x="58" y="36" width="78" height="54" rx="18"/>
+        <path d="M 104 88 L 124 106 L 120 84 Z"/>
+      </g>
+    </mask>
+  </defs>
+  <g class="ink" mask="url(#cut)">
+    <rect x="8" y="8" width="80" height="58" rx="18"/>
+    <path d="M 22 60 L 18 84 L 44 64 Z"/>
+  </g>
+  <g fill="#00C94F">
+    <rect x="58" y="36" width="78" height="54" rx="18"/>
+    <path d="M 104 88 L 124 106 L 120 84 Z"/>
+  </g>
+  <path d="M 80 54 H 114 M 97 47 V 54 M 84 78 Q 102 72 107 55 M 110 78 Q 95 73 88 61" fill="none" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

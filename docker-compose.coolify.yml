@@ -1,0 +1,124 @@
+# Coolify Optimized Docker Compose
+# Use this file for Coolify deployments
+# All environment variables can be configured in Coolify UI
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: translately-mongodb
+    restart: unless-stopped
+    command: ["--replSet", "rs0", "--bind_ip_all", "--port", "27017"]
+    environment:
+      MONGO_INITDB_DATABASE: translately
+    volumes:
+      - mongodb_data:/data/db
+    # No published port: MongoDB runs without authentication and must only be
+    # reachable on the internal network.
+    healthcheck:
+      # Healthy only once this node is the writable primary: right after
+      # rs.initiate() (and after every restart) there is a short election
+      # window in which the backend's schema sync would fail.
+      test: echo "try { rs.status() } catch (err) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongodb:27017'}]}) }; if (!db.hello().isWritablePrimary) quit(1)" | mongosh --port 27017 --quiet
+      interval: 5s
+      timeout: 30s
+      retries: 30
+      start_period: 0s
+      start_interval: 1s
+    networks:
+      - translately-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: translately-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    # No published port: internal network only.
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - translately-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: translately-backend
+    # Recover from a failed start (e.g. database not ready for the schema
+    # sync) instead of staying down until the next deploy
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      DATABASE_URL: ${DATABASE_URL:-mongodb://mongodb:27017/translately?replicaSet=rs0}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (min. 32 chars, e.g. openssl rand -hex 32)}
+      PORT: ${BACKEND_PORT:-4000}
+      FRONTEND_URL: ${FRONTEND_URL:?FRONTEND_URL is required (e.g. https://app.example.com)}
+      CORS_ORIGINS: ${CORS_ORIGINS:-${FRONTEND_URL}}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      # Recommended for public deployments: required by the first-run setup
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
+      SKIP_DB_PUSH: ${SKIP_DB_PUSH:-false}
+      # Per-IP requests per minute on the delivery routes (/sdk/translations)
+      SDK_RATE_LIMIT_PER_MINUTE: ${SDK_RATE_LIMIT_PER_MINUTE:-600}
+      # AI translation of missing texts; without a key the feature is off
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AI_TRANSLATION_MODEL: ${AI_TRANSLATION_MODEL:-}
+      # Webhooks: private/http targets are blocked unless explicitly allowed
+      WEBHOOK_ALLOW_PRIVATE: ${WEBHOOK_ALLOW_PRIVATE:-false}
+      WEBHOOK_ALLOW_INSECURE: ${WEBHOOK_ALLOW_INSECURE:-false}
+      WEBHOOK_WORKER_DISABLED: ${WEBHOOK_WORKER_DISABLED:-false}
+    # No published port: the API is reached through the reverse proxy
+    # (Coolify domain / frontend nginx), never directly.
+    expose:
+      - "4000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - uploads:/app/uploads
+    networks:
+      - translately-network
+    healthcheck:
+      # node:22-slim has neither wget nor curl; use Node's built-in fetch
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+      # Probe quickly while starting, so the frontend is not held back for a
+      # full 30s interval
+      start_interval: 2s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: translately-frontend
+    restart: unless-stopped
+    environment:
+      # Same-origin default: the frontend nginx proxies /api to the backend.
+      # Coolify also passes this as a build arg and Vite bakes it into the
+      # bundle, so it must be a URL the browser can reach (never backend:4000).
+      - VITE_API_URL=${VITE_API_URL:-/api}
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - translately-network
+
+volumes:
+  mongodb_data:
+  redis_data:
+  uploads:
+
+networks:
+  translately-network:
+    driver: bridge

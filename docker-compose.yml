@@ -1,0 +1,87 @@
+services:
+  mongodb:
+    image: mongo:7
+    container_name: translately-mongodb
+    command: ["--replSet", "rs0", "--bind_ip_all", "--port", "27017"]
+    environment:
+      MONGO_INITDB_DATABASE: translately
+    volumes:
+      - mongodb_data:/data/db
+    ports:
+      # Local access only; MongoDB runs without authentication
+      - "127.0.0.1:27017:27017"
+    healthcheck:
+      # Healthy only once this node is the writable primary: right after
+      # rs.initiate() (and after every restart) there is a short election
+      # window in which the backend's schema sync would fail.
+      test: echo "try { rs.status() } catch (err) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongodb:27017'}]}) }; if (!db.hello().isWritablePrimary) quit(1)" | mongosh --port 27017 --quiet
+      interval: 5s
+      timeout: 30s
+      retries: 30
+      start_period: 0s
+      start_interval: 1s
+
+  redis:
+    image: redis:7-alpine
+    container_name: translately-redis
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: translately-backend
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: mongodb://mongodb:27017/translately?replicaSet=rs0
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (min. 32 chars, e.g. openssl rand -hex 32)}
+      PORT: 4000
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      # Recommended when the instance is publicly reachable before setup
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
+      SKIP_DB_PUSH: ${SKIP_DB_PUSH:-false}
+      # Per-IP requests per minute on the delivery routes (/sdk/translations)
+      SDK_RATE_LIMIT_PER_MINUTE: ${SDK_RATE_LIMIT_PER_MINUTE:-600}
+      # Webhooks: private/http targets are blocked unless explicitly allowed
+      WEBHOOK_ALLOW_PRIVATE: ${WEBHOOK_ALLOW_PRIVATE:-false}
+      WEBHOOK_ALLOW_INSECURE: ${WEBHOOK_ALLOW_INSECURE:-false}
+      WEBHOOK_WORKER_DISABLED: ${WEBHOOK_WORKER_DISABLED:-false}
+      # AI translation of missing texts; without a key the feature is off
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AI_TRANSLATION_MODEL: ${AI_TRANSLATION_MODEL:-}
+    ports:
+      - "127.0.0.1:4000:4000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend/uploads:/app/uploads
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: translately-frontend
+    environment:
+      - BACKEND_HOST=backend
+      - BACKEND_PORT=4000
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  mongodb_data:
+  redis_data:

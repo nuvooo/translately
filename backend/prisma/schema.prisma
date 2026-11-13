@@ -1,0 +1,329 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String    @id @default(auto()) @map("_id") @db.ObjectId
+  email             String    @unique
+  password          String
+  firstName         String
+  lastName          String
+  isActive          Boolean   @default(true)
+  emailVerified     Boolean   @default(false)
+  emailVerifyToken  String?
+  resetToken        String?
+  resetTokenExpiry  DateTime?
+  passwordChangedAt DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Relations
+  memberships     OrganizationMember[]
+  apiKeys         ApiKey[]
+  auditLogs       AuditLog[]
+  acceptedInvites OrganizationInvite[] @relation(name: "AcceptedInvites")
+
+  @@map("users")
+}
+
+model Organization {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String
+  slug        String   @unique
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  members      OrganizationMember[]
+  projects     Project[]
+  apiKeys      ApiKey[]
+  auditLogs    AuditLog[]
+  invites      OrganizationInvite[]
+
+  @@map("organizations")
+}
+
+model OrganizationMember {
+  id             String           @id @default(auto()) @map("_id") @db.ObjectId
+  userId         String           @db.ObjectId
+  organizationId String           @db.ObjectId
+  role           OrganizationRole @default(MEMBER)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  // Relations
+  user         User         @relation(fields: [userId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([userId, organizationId])
+  @@index([userId])
+  @@index([organizationId])
+  @@map("organization_members")
+}
+
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum ProjectType {
+  SINGLE
+  MULTI
+}
+
+model Project {
+  id             String      @id @default(auto()) @map("_id") @db.ObjectId
+  name           String
+  key            String
+  description    String?
+  type           ProjectType @default(SINGLE)
+  allowedOrigins String[]    @default([]) // CORS origins allowed for SDK access
+  languages      String[]    @default([])
+  namespaces     String[]    @default(["translation"])
+  organizationId String      @db.ObjectId
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  // Relations
+  organization Organization  @relation(fields: [organizationId], references: [id])
+  brands       Brand[]
+  auditLogs    AuditLog[]
+  translationKeys TranslationKey[]
+
+  @@unique([organizationId, key])
+  @@index([organizationId])
+  @@map("projects")
+}
+
+model Brand {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String
+  key         String
+  description String?
+  languages   String[] @default([])
+  projectId   String   @db.ObjectId
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  project Project @relation(fields: [projectId], references: [id])
+
+  @@unique([projectId, key])
+  @@index([projectId])
+  @@map("brands")
+}
+
+model ApiKey {
+  id             String     @id @default(auto()) @map("_id") @db.ObjectId
+  name           String
+  key            String     @unique
+  type           ApiKeyType @default(SERVER)
+  organizationId String     @db.ObjectId
+  userId         String?    @db.ObjectId
+  projectId      String?    @db.ObjectId // set for MCP keys only
+  keyHash        String? // sha256 of the plain key, MCP keys only
+  lastUsedAt     DateTime?
+  expiresAt      DateTime?
+  isActive       Boolean    @default(true)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User?        @relation(fields: [userId], references: [id])
+
+  @@index([organizationId])
+  @@index([userId])
+  @@index([keyHash])
+  @@map("api_keys")
+}
+
+enum ApiKeyType {
+  SERVER
+  CLIENT
+  SDK
+  MCP
+}
+
+model AuditLog {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  action         String
+  entityType     String
+  entityId       String
+  organizationId String   @db.ObjectId
+  projectId      String?  @db.ObjectId
+  userId         String?  @db.ObjectId
+  apiKeyId       String?  @db.ObjectId
+  apiKeyName     String?
+  oldValues      Json?
+  newValues      Json?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id])
+  project      Project?     @relation(fields: [projectId], references: [id])
+  user         User?        @relation(fields: [userId], references: [id])
+
+  @@index([organizationId])
+  @@index([projectId])
+  @@index([userId])
+  @@index([createdAt])
+  // Organization log pages: filter by org, newest first.
+  @@index([organizationId, createdAt])
+  @@map("audit_logs")
+}
+
+model OrganizationInvite {
+  id             String           @id @default(auto()) @map("_id") @db.ObjectId
+  // Optional: unbound invites can be used by anyone holding the link
+  email          String?
+  organizationId String           @db.ObjectId
+  role           OrganizationRole @default(MEMBER)
+  // SHA-256 of the invite token; the plain token is only shown once.
+  // Not @unique: MongoDB unique indexes treat a missing field as null, so
+  // legacy invites (no hash) and new invites (no plain token) would collide.
+  // Tokens are 256-bit random values, uniqueness is guaranteed by entropy.
+  tokenHash      String?
+  // Legacy plain token of invites created before hashing was introduced
+  token          String?
+  expiresAt      DateTime
+  createdAt      DateTime         @default(now())
+  createdById    String?          @db.ObjectId
+  acceptedAt     DateTime?
+  acceptedById   String?          @db.ObjectId
+  revokedAt      DateTime?
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  acceptedBy   User?        @relation(name: "AcceptedInvites", fields: [acceptedById], references: [id])
+
+  @@index([organizationId])
+  @@index([organizationId, email])
+  @@index([tokenHash])
+  @@index([token])
+  @@map("organization_invites")
+}
+
+/// Singleton documents guarding one-time instance operations (e.g. setup).
+model InstanceLock {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  key       String   @unique
+  createdAt DateTime @default(now())
+
+  @@map("instance_locks")
+}
+
+// --- Change notifications ---
+
+/// Configuration version per project. Incremented on every
+/// change that can affect SDK responses (ETag).
+model ConfigVersion {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  projectId     String   @unique @db.ObjectId
+  version       Int      @default(0)
+  updatedAt     DateTime @updatedAt
+
+  @@map("config_versions")
+}
+
+model Webhook {
+  id                  String    @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId      String    @db.ObjectId
+  projectId           String    @db.ObjectId
+  url                 String
+  secret              String
+  enabled             Boolean   @default(true)
+  description         String?
+  consecutiveFailures Int       @default(0)
+  createdById         String    @db.ObjectId
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  lastDeliveryAt      DateTime?
+  lastStatus          String?
+
+  deliveries WebhookDelivery[]
+
+  @@index([projectId])
+  @@map("webhooks")
+}
+
+model WebhookDelivery {
+  id            String    @id @default(auto()) @map("_id") @db.ObjectId
+  webhookId     String    @db.ObjectId
+  eventId       String
+  event         Json
+  attempt       Int       @default(0)
+  /// pending | success | failed
+  status        String
+  responseCode  Int?
+  responseBody  String?
+  error         String?
+  durationMs    Int?
+  nextAttemptAt DateTime?
+  lockedUntil   DateTime?
+  /// Random token of the worker that currently holds the lock; results are
+  /// only written while it still matches (lost locks are not overwritten)
+  lockToken     String?
+  /// Sent by a user (test event or redeliver): no retries, does not affect
+  /// the webhook's failure counter or auto-disable
+  manual        Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  webhook Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@unique([webhookId, eventId])
+  @@index([status, nextAttemptAt])
+  @@index([webhookId, createdAt])
+  @@map("webhook_deliveries")
+}
+
+model TranslationKey {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  projectId      String   @db.ObjectId
+  organizationId String   @db.ObjectId
+  namespace      String   @default("translation")
+  key            String
+  description    String?
+  /// true: the key can neither be renamed nor deleted until it is unlocked.
+  /// Optional on purpose: keys stored before this field existed have no value.
+  locked         Boolean?
+  createdById    String   @db.ObjectId
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  project        Project  @relation(fields: [projectId], references: [id])
+  values         TranslationValue[]
+
+  @@unique([projectId, namespace, key])
+  @@index([projectId, namespace])
+  @@map("translation_keys")
+}
+
+model TranslationValue {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  keyId         String   @db.ObjectId
+  projectId     String   @db.ObjectId
+  language      String
+  /// 'default' oder die Id der Brand (bewusst kein nullable Feld: eindeutiger Index)
+  scope         String   @default("default")
+  value         String
+  updatedById   String?  @db.ObjectId
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  key           TranslationKey @relation(fields: [keyId], references: [id], onDelete: Cascade)
+
+  @@unique([keyId, language, scope])
+  @@index([projectId, language, scope])
+  @@map("translation_values")
+}
