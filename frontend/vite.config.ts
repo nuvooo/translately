@@ -42,6 +42,11 @@ export default defineConfig({
   },
   build: {
     sourcemap: false,
+    // The flags stay separate files that the browser fetches one by one when
+    // a flag is shown. Inlined, the ~500 small SVGs would add ~400 kB to the
+    // stylesheet of the translations page.
+    assetsInlineLimit: (filePath) =>
+      filePath.includes('flag-icons') ? false : undefined,
   },
   test: {
     globals: true,

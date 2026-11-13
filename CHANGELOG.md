@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Sprachen mit Flagge und Liste: der Dialog "Sprachen verwalten" bietet eine durchsuchbare Liste (Name, Flagge, ISO-Code) an, andere gueltige Codes lassen sich weiter von Hand eingeben; Tabellenkopf, Sprachauswahl und Export zeigen die Flagge zur Sprache (neue Abhaengigkeit `flag-icons`)
+- Export aller Sprachen als ZIP: "Exportieren" > "Alle Sprachen (ZIP)" laedt je Sprache eine JSON-Datei des gewaehlten Ziels und Namespace in einem Archiv `<projekt>[.<brand>].<namespace>.zip` (neue Abhaengigkeit `fflate`)
 - Keys sperren: ein gesperrter Key kann weder umbenannt noch geloescht werden (Texte und Beschreibung bleiben bearbeitbar)
   - Sperren/Entsperren im Zeilenmenue ab Rolle Admin; ein Schloss mit Hinweistext markiert gesperrte Keys
   - Gilt auch fuer die API (409, `code: key_locked`) und die MCP-Werkzeuge `update_key` und `delete_key`; entsperrt wird nur in der Weboberflaeche

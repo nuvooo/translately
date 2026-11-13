@@ -540,6 +540,71 @@ describe('LanguagesDialog', () => {
       expect(listed()).toEqual(['de', 'en'])
     })
 
+    it('Sprachliste: zeigt Name und ISO-Code, die Eingabe filtert nach Name oder Code', async () => {
+      const user = userEvent.setup()
+      renderDialog()
+      const catalog = () =>
+        screen.getByRole('group', { name: 'Sprachen mit ISO-Code' })
+      expect(
+        within(catalog()).getByRole('button', {
+          name: 'Französisch (fr) hinzufügen',
+        })
+      ).toHaveTextContent('Französischfr')
+
+      await user.type(screen.getByLabelText('Sprachcode'), 'portu')
+      expect(
+        within(catalog())
+          .getAllByRole('button')
+          .map((button) => button.getAttribute('aria-label'))
+      ).toEqual([
+        'Portugiesisch (pt) hinzufügen',
+        'Portugiesisch (Brasilien) (pt-BR) hinzufügen',
+        'Portugiesisch (Portugal) (pt-PT) hinzufügen',
+      ])
+    })
+
+    it('Sprachliste: ein Klick nimmt die Sprache auf und bietet sie nicht mehr an', async () => {
+      const user = userEvent.setup()
+      renderDialog()
+      await user.click(
+        screen.getByRole('button', { name: 'Spanisch (es) hinzufügen' })
+      )
+      expect(
+        within(screen.getByRole('list', { name: 'Ausgewählte Sprachen' }))
+          .getAllByRole('listitem')
+          .map((item) => item.getAttribute('data-language'))
+      ).toContain('es')
+      expect(
+        screen.queryByRole('button', { name: 'Spanisch (es) hinzufügen' })
+      ).toBeNull()
+      expect(screen.getByLabelText('Sprachcode')).toHaveFocus()
+    })
+
+    it('Enter nimmt bei einem Namensanfang die passende Sprache', async () => {
+      const user = userEvent.setup()
+      renderDialog()
+      await user.type(screen.getByLabelText('Sprachcode'), 'Italie{Enter}')
+      expect(
+        within(screen.getByRole('list', { name: 'Ausgewählte Sprachen' }))
+          .getAllByRole('listitem')
+          .map((item) => item.getAttribute('data-language'))
+      ).toContain('it')
+      expect(screen.queryByRole('alert')).toBeNull()
+    })
+
+    it('gewählte Sprachen tragen ihre Flagge', () => {
+      renderDialog()
+      const chips = within(
+        screen.getByRole('list', { name: 'Ausgewählte Sprachen' })
+      ).getAllByRole('listitem')
+      expect(
+        chips.map((chip) => [
+          chip.getAttribute('data-language'),
+          chip.querySelector('[data-flag]')?.getAttribute('data-flag'),
+        ])
+      ).toContainEqual(['de', 'de'])
+    })
+
     it('der Validierungsfehler ist ein alert', async () => {
       const user = userEvent.setup()
       renderDialog()

@@ -16,14 +16,21 @@ import i18n from '@/i18n'
 import * as api from './api'
 import * as saveBlob from './saveBlob'
 import { TranslationsActionsMenu } from './TranslationsActionsMenu'
+import * as zip from './zip'
 
 vi.mock('./api', () => ({ exportFile: vi.fn() }))
 vi.mock('./saveBlob', () => ({ saveBlobAsFile: vi.fn() }))
+vi.mock('./zip', () => ({
+  zipFiles: vi.fn((files: { name: string }[]) =>
+    Promise.resolve(new Blob([files.map((file) => file.name).join(',')]))
+  ),
+}))
 vi.mock('@/lib/permissions', () => ({ handleForbidden: vi.fn(() => false) }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 const exportFile = vi.mocked(api.exportFile)
 const save = vi.mocked(saveBlob.saveBlobAsFile)
+const zipFiles = vi.mocked(zip.zipFiles)
 
 type Props = ComponentProps<typeof TranslationsActionsMenu>
 
@@ -259,6 +266,67 @@ describe('TranslationsActionsMenu', () => {
         expect(container.querySelector('.animate-spin')).toBeNull()
       )
       expect(item('Exportieren')).not.toHaveAttribute('aria-disabled')
+    })
+
+    it('all languages: one request per language, saved as <project>.<ns>.zip', async () => {
+      const { user } = renderMenu()
+      await openExport(user)
+      choose(item('Alle Sprachen (ZIP)'))
+
+      await waitFor(() => expect(save).toHaveBeenCalled())
+      expect(exportFile.mock.calls.map((call) => call[1])).toEqual([
+        { language: 'de', namespace: 'translation' },
+        { language: 'en', namespace: 'translation' },
+      ])
+      expect(zipFiles.mock.calls[0][0].map((file) => file.name)).toEqual([
+        'translation.de.json',
+        'translation.en.json',
+      ])
+      expect(save).toHaveBeenCalledTimes(1)
+      expect(save).toHaveBeenCalledWith(
+        expect.any(Blob),
+        'shop.translation.zip'
+      )
+    })
+
+    it('all languages of a brand: brand languages, brandId and the brand key in the name', async () => {
+      const { user } = renderMenu({ brands: [ALPHA] })
+      await openExport(user)
+      choose(screen.getByRole('menuitemradio', { name: 'Alpha' }))
+      choose(item('Alle Sprachen (ZIP)'))
+
+      await waitFor(() => expect(save).toHaveBeenCalled())
+      expect(exportFile.mock.calls.map((call) => call[1])).toEqual([
+        { language: 'fr', namespace: 'translation', brandId: 'alpha' },
+        { language: 'it', namespace: 'translation', brandId: 'alpha' },
+      ])
+      expect(save).toHaveBeenCalledWith(
+        expect.any(Blob),
+        'shop.alpha.translation.zip'
+      )
+    })
+
+    it('all languages: saves nothing when one language fails', async () => {
+      exportFile
+        .mockResolvedValueOnce(new Blob(['{}']))
+        .mockRejectedValueOnce(new Error('boom'))
+      const { user } = renderMenu()
+      await openExport(user)
+      choose(item('Alle Sprachen (ZIP)'))
+
+      await waitFor(() =>
+        expect(toast.error).toHaveBeenCalledWith(
+          'Der Export ist fehlgeschlagen.'
+        )
+      )
+      expect(zipFiles).not.toHaveBeenCalled()
+      expect(save).not.toHaveBeenCalled()
+    })
+
+    it('offers no ZIP entry for a single language', async () => {
+      const { user } = renderMenu({ brands: [ALPHA], projectLanguages: ['de'] })
+      await openExport(user)
+      expect(screen.queryByRole('menuitem', { name: /ZIP/ })).toBeNull()
     })
 
     it('toasts a generic error when the export fails', async () => {
