@@ -16,6 +16,8 @@ import { Label } from '@/components/ui/label'
 import { apiMessage, getErrorStatus } from '@/lib/errors'
 import { handleForbidden } from '@/lib/permissions'
 import { setBrandLanguages, setProjectLanguages } from './api'
+import { LanguageFlag } from './LanguageFlag'
+import { languageName, searchCatalog } from './languageCatalog'
 import { MAX_LANGUAGES, similarLanguage, validateLanguage } from './languages'
 import { TargetSelect } from './TargetSelect'
 
@@ -50,6 +52,9 @@ const scopeKey = (scope: Scope) => `${scope.kind}:${scope.id}`
  * the meantime (409), `onStale` lets the parent reload, and the next
  * `languages` passed in becomes the new baseline while the draft is kept.
  *
+ * Languages are picked from a catalog (name, flag and ISO code) that the
+ * input filters; any other valid code can still be typed and added.
+ *
  * With `target`, the header offers the choice between the project and its
  * brands; the parent turns the choice into `scope` and `languages`. The
  * choice is locked once the draft differs from the stored list.
@@ -74,7 +79,7 @@ export function LanguagesDialog(props: {
 }): JSX.Element {
   const { open, onOpenChange, scope, languages, onSaved, onStale, target } =
     props
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [draft, setDraft] = useState<string[]>(languages)
   const [input, setInput] = useState('')
@@ -160,13 +165,27 @@ export function LanguagesDialog(props: {
       ? current.projectLanguages.filter((language) => !draft.includes(language))
       : []
 
+  /** Catalog languages matching the input that are not in the draft yet. */
+  const matches = full ? [] : searchCatalog(input, draft, i18n.language)
+
   const focusInput = () => inputRef.current?.focus()
 
   const add = (code: string) => {
     if (busy || full) return
-    const trimmed = code.trim()
+    let trimmed = code.trim()
     if (trimmed === '') return
-    const problem = validateLanguage(trimmed, draft)
+    let problem = validateLanguage(trimmed, draft)
+    // Not a code, but the start of a name ("Franz"): take that language.
+    if (problem === 'invalid') {
+      const typed = trimmed.toLowerCase()
+      const named = matches.find((entry) =>
+        entry.name.toLowerCase().startsWith(typed)
+      )
+      if (named) {
+        trimmed = named.code
+        problem = validateLanguage(trimmed, draft)
+      }
+    }
     if (problem) {
       setError({ kind: problem, code: trimmed })
       return
@@ -378,6 +397,38 @@ export function LanguagesDialog(props: {
                     {t('translations.languages.max', { max: MAX_LANGUAGES })}
                   </p>
                 )}
+                {matches.length > 0 && (
+                  // biome-ignore lint/a11y/useSemanticElements: a fieldset would need a visible legend; the label names the group
+                  <div
+                    role="group"
+                    aria-label={t('translations.languages.catalog')}
+                    className="max-h-44 overflow-y-auto rounded-md border p-1"
+                  >
+                    {matches.map((entry) => (
+                      <button
+                        key={entry.code}
+                        type="button"
+                        className="flex w-full items-center gap-2 rounded-sm px-2 py-1 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:opacity-50"
+                        aria-label={t('translations.languages.suggest', {
+                          language: `${entry.name} (${entry.code})`,
+                        })}
+                        onClick={() => {
+                          add(entry.code)
+                          focusInput()
+                        }}
+                        disabled={busy}
+                      >
+                        <LanguageFlag language={entry.code} />
+                        <span className="min-w-0 flex-1 truncate">
+                          {entry.name}
+                        </span>
+                        <span className="font-mono text-xs text-muted-foreground">
+                          {entry.code}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {suggestions.length > 0 && (
@@ -403,6 +454,7 @@ export function LanguagesDialog(props: {
                         disabled={busy || full}
                       >
                         <Plus className="mr-1 h-3 w-3" aria-hidden />
+                        <LanguageFlag language={language} className="mr-1" />
                         {language}
                       </Button>
                     ))}
@@ -430,8 +482,10 @@ export function LanguagesDialog(props: {
                     <li
                       key={language}
                       data-language={language}
+                      title={languageName(language, i18n.language) ?? undefined}
                       className="inline-flex items-center gap-1 rounded-md border py-0.5 pl-2 pr-0.5 font-mono text-xs"
                     >
+                      <LanguageFlag language={language} />
                       {language}
                       <Button
                         type="button"

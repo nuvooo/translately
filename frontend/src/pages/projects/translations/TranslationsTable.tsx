@@ -28,6 +28,8 @@ import {
 } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { BrandRows, brandRowId } from './BrandRows'
+import { LanguageFlag } from './LanguageFlag'
+import { languageName } from './languageCatalog'
 import { TranslationCell } from './TranslationCell'
 import {
   aiSourceLanguage,
@@ -105,7 +107,7 @@ export function TranslationsTable({
   canDelete = false,
   onSuggest,
 }: TranslationsTableProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const { languages, rows, total, page, pageSize } = table
   // Expanded key rows; another page starts collapsed again (a namespace
   // switch remounts the table).
@@ -157,8 +159,12 @@ export function TranslationsTable({
                   key={language}
                   scope="col"
                   className="px-3 py-2 font-mono font-medium"
+                  title={languageName(language, i18n.language) ?? undefined}
                 >
-                  {language}
+                  <span className="inline-flex items-center gap-1.5">
+                    <LanguageFlag language={language} />
+                    {language}
+                  </span>
                 </th>
               ))}
             </tr>

@@ -364,6 +364,21 @@ describe('TranslationsTable', () => {
     ).toHaveFocus()
   })
 
+  it('Spaltenkopf: Flagge und Code der Sprache, der Name als Tooltip', () => {
+    setup()
+    const head = (code: string) =>
+      screen.getByRole('columnheader', { name: code })
+    expect(head('de').querySelector('[data-flag]')).toHaveAttribute(
+      'data-flag',
+      'de'
+    )
+    expect(head('en').querySelector('[data-flag]')).toHaveAttribute(
+      'data-flag',
+      'gb'
+    )
+    expect(head('fr')).toHaveAttribute('title', 'Französisch')
+  })
+
   describe('Zeilenmenü und Sperre', () => {
     const LOCKED: TableRow = { ...ROW_2, locked: true }
     const lockedTable = { ...TABLE, rows: [ROW_1, LOCKED] }

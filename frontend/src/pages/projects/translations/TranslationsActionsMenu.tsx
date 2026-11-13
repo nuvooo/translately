@@ -63,6 +63,7 @@ export function TranslationsActionsMenu({
   const [snippetOpen, setSnippetOpen] = useState(false)
   const exportState = useExport({
     projectId,
+    projectKey,
     brands,
     projectLanguages,
     namespace,
